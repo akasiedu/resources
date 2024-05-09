@@ -1,0 +1,101 @@
+pipeline{
+    agent any
+
+    environment{
+        DOCKERHUB_USERNAME= "akasiedu"
+        DOCKER_REPOSITORY= "V1.0.0"
+        DOCKER_CREDENTIALS="docker_auth_token"
+        APPLICATION_REPO= "terraform-image"
+        AWS_CREDENTIALS_ID= "terraform -builds"
+
+    }
+
+    parameters{
+        string(name: "BRANCH_NAME", defaultValue: "master", description:"Branch Jenkinsfile is pulled from")
+        string(name: "IMAGE_TAG", defaultValue: "v1.0.0", description:"Image version or tag")
+    }
+
+    stages{
+        stage("Clone Repository") {
+            steps {
+                script {
+                    git credentialsId:"jenkins-git-ssh",
+                        url:"https://github.com/akasiedu/resources",
+                        branch: "${params.BRANCH_NAME}"
+
+                }
+            }
+        }
+
+        stage("Dockerhub Login") {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'docker_auth_token', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]) {
+                    sh "docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD"
+                }
+            }
+        }
+
+
+        // stage("Building the image") {
+        //     steps {
+        //         dir ("${WORKSPACE}/terraform/docker"){
+        //             script {
+        //             sh """
+        //                 docker build -t ${env.DOCKERHUB_USERNAME}/jenkins-master:${params.IMAGE_TAG} .
+        //                 docker images | grep ${params.IMAGE_TAG}
+        //             """
+        //             }
+        //         }   
+        //     }
+        // }
+
+        stage("List Content"){
+            steps{
+                script{
+                    dir("${WORKSPACE}"){
+                        withCredentials([usernamePassword(credentialsId: 'docker_auth_token', usernameVariable: 'DOCKER_USERNAME', passwordVariable: 'DOCKER_PASSWORD')]){
+                            docker.image("akasiedu/jenkins-master:v1.0.0").inside("-u 0:0"){
+                                sh """
+                                    ls -l
+                                """
+                            }
+                        } 
+                    }
+                }
+            }
+        }
+
+        stage("Configure AWS CLI"){
+            steps{
+                script{
+                    dir("${WORKSPACE}/terraform-self/ec2"){
+                        withCredentials([
+                            [$class: "AmazonWebServicesCredentialsBinding",
+                            accessKeyVariable: "AWS_ACCESS_KEY_ID",
+                            credentialsId:  "${env.AWS_CREDENTIALS_ID}",
+                            secretKeyVariable: "AWS_SECRET_ACCESS_KEY"],
+
+                            usernamePassword(credentialsId: 'docker_auth_token', 
+                            usernameVariable: 'DOCKER_USERNAME', 
+                            passwordVariable: 'DOCKER_PASSWORD')]){
+                                docker.image("akasiedu/jenkins-master:v1.0.0").inside("-u 0:0"){
+                                    sh"""
+                                        aws configure set aws access_key_id
+                                        $AWS_ACCESS_KEY_ID
+                                        aWs configure set aws_secret_access_key
+                                        $AWS_SECRET_ACCESS_KEY
+                                        aws configure set default.region us-east-1
+
+                                        terraform init
+                                        terraform fmt
+                                        terraform plan
+                                        terraform apply --auto-approve
+                                    """
+                                }
+                            }
+                    }
+                }
+            }
+        }
+    }
+}
